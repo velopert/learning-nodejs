@@ -1,0 +1,31 @@
+{
+  "name": "04-create-koa-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "dotenv": "^6.0.0",
+    "joi": "^13.4.0",
+    "koa": "^2.5.1",
+    "koa-bodyparser": "^4.2.1",
+    "koa-router": "^7.4.0",
+    "mongoose": "^5.1.6",
+    "mysql2": "^1.5.3",
+    "sequelize": "^4.38.0"
+  },
+  "devDependencies": {
+    "cross-env": "^5.2.0",
+    "eslint": "^5.0.0",
+    "eslint-config-airbnb-base": "^13.0.0",
+    "eslint-plugin-import": "^2.12.0",
+    "nodemon": "^1.17.5",
+    "prettier-eslint": "^8.8.2"
+  },
+  "scripts": {
+    "start": "cross-env NODE_PATH=src node src",
+    "start:dev": "cross-env NODE_PATH=src nodemon src",
+    "sync": "cross-env NODE_PATH=./src node src/database/sync.js"
+  },
+  "author": "",
+  "license": "ISC"
+}

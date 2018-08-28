@@ -1,0 +1,218 @@
+const Joi = require('joi');
+const Post = require('database/models/post');
+const Tag = require('database/models/tag');
+const User = require('database/models/user');
+const PostsTags = require('database/models/postsTags');
+const { Op } = require('sequelize');
+
+exports.checkOwnPost = async (ctx, next) => {
+  const id = parseInt(ctx.params.id, 10);
+  try {
+    const post = await Post.findById(id);
+    if (post.id !== ctx.user.id) {
+      ctx.status = 409;
+      ctx.body = {
+        msg: 'no permission',
+      };
+      return null;
+    }
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+  return next();
+};
+
+exports.write = async (ctx) => {
+  const schema = Joi.object().keys({
+    title: Joi.string().required(),
+    body: Joi.string().required(),
+    tags: Joi.array()
+      .items(Joi.string())
+      .required(),
+  });
+
+  const result = Joi.validate(ctx.request.body, schema);
+  if (result.error) {
+    ctx.status = 400;
+    ctx.body = result.error;
+    return;
+  }
+
+  const { title, body, tags } = ctx.request.body;
+
+  try {
+    const post = Post.build({
+      title,
+      body,
+      userId: ctx.user.id,
+    });
+    await post.save();
+    // 여러개 생성
+    const tagIds = await Promise.all(tags.map(tag => Tag.getId(tag)));
+    await PostsTags.bulkCreate(tagIds.map(tagId => ({ postId: post.id, tagId })));
+
+    // 포스트 다시 조회
+    const postData = await Post.findById(post.id, {
+      include: [
+        Tag,
+        {
+          model: User,
+          attributes: ['username'],
+        },
+      ],
+    });
+    // 시리얼라이징
+    ctx.body = Post.serialize(postData);
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+
+exports.list = async (ctx) => {
+  const { cursor } = ctx.query;
+  try {
+    const posts = await Post.findAll({
+      where: cursor
+        ? {
+          id: {
+            [Op.lt]: parseInt(cursor, 10),
+          },
+        }
+        : null,
+      include: [
+        Tag,
+        {
+          model: User,
+          attributes: ['username'],
+        },
+      ],
+      order: [['id', 'DESC']],
+      limit: 10,
+      // offset: (page - 1) * 10,
+    });
+    const serializedPosts = posts.map(Post.serialize);
+
+    // 그 이후에 데이터가 더 있는지 확인
+    let next = null;
+    if (posts.length > 0) {
+      const lastId = posts[posts.length - 1].id;
+      const count = await Post.count({
+        where: {
+          id: {
+            [Op.lt]: lastId,
+          },
+        },
+      });
+      if (count > 0) {
+        next = `${ctx.path}?cursor=${lastId}`;
+      }
+    }
+
+    ctx.body = {
+      data: serializedPosts,
+      next,
+    };
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+
+exports.read = async (ctx) => {
+  const { id } = ctx.params;
+  try {
+    const post = await Post.findOne({
+      where: {
+        id: parseInt(id, 10),
+      },
+      include: [
+        Tag,
+        {
+          model: User,
+          attributes: ['username'],
+        },
+      ],
+    });
+    if (!post) {
+      // 포스트가 없음
+      ctx.status = 404;
+      return;
+    }
+    ctx.body = Post.serialize(post);
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+
+exports.remove = async (ctx) => {
+  const { id } = ctx.params;
+  try {
+    const post = await Post.findById(parseInt(id, 10));
+    if (!post) {
+      ctx.status = 404; // Not Found
+      return;
+    }
+    await post.destroy();
+    ctx.status = 204; // 성공했지만 보여줄 데이터는 없을 때 No Content
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
+
+exports.update = async (ctx) => {
+  const { id } = ctx.params;
+  const schema = Joi.object().keys({
+    title: Joi.string(),
+    body: Joi.string(),
+    tags: Joi.array().items(Joi.string()),
+  });
+
+  const result = Joi.validate(ctx.request.body, schema);
+  if (result.error) {
+    ctx.status = 400;
+    ctx.body = result.error;
+    return;
+  }
+
+  try {
+    const post = await Post.findById(parseInt(id, 10), {
+      include: [Tag],
+    });
+    if (!post) {
+      ctx.status = 404;
+      return;
+    }
+    const { title, body, tags } = ctx.request.body;
+
+    if (tags) {
+      // 새로 추가해야하는 태그
+      const tagsToAdd = tags.filter(tag => !post.tags.find(row => row.text === tag));
+      const tagIdsToAdd = await Promise.all(tagsToAdd.map(Tag.getId));
+      await PostsTags.bulkCreate(tagIdsToAdd.map(tagId => ({ postId: post.id, tagId })));
+
+      // 삭제해야하는 태그
+      // 이번에는 PostsTags 를 지워야 하므로, tagId 가 아닌 postsTagsId 를 선택함
+      const postsTagsIdsToRemove = post.tags
+        .filter(row => !tags.find(tag => tag === row.text))
+        .map(row => row.posts_tags.id);
+      await PostsTags.destroy({
+        where: {
+          id: postsTagsIdsToRemove,
+        },
+      });
+    }
+
+    await post.update({ title, body });
+    const updated = await Post.findById(post.id, {
+      include: [
+        Tag,
+        {
+          model: User,
+          attributes: ['username'],
+        },
+      ],
+    });
+    ctx.body = Post.serialize(updated);
+  } catch (e) {
+    ctx.throw(500, e);
+  }
+};
